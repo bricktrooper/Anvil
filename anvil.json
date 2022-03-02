@@ -5,5 +5,5 @@
 	"CCFLAGS": [],
 	"LDFLAGS": [],
 	"LDLIBS": [],
-	"DIR": []
+	"SRC": ["example"]
 }
