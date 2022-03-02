@@ -1,5 +1,6 @@
 import os
 import json
+import subprocess
 
 # ===================== CONSTANTS ===================== #
 
@@ -82,26 +83,110 @@ def verify_config(config):
 					log_error(f"'{field}' must only contain strings")
 					return ERROR
 
+	if config['ART'] == "":
+		log_error(f"'ART' was not specified")
+		return ERROR
+	if config['EXE'] == "":
+		log_error(f"'EXE' was not specified")
+		return ERROR
+	if config['CC'] == "":
+		log_error(f"'CC' was not specified")
+		return ERROR
+	if len(config['SRC']) == 0:
+		log_error(f"'SRC' was not specified")
+		return ERROR
+
 	return SUCCESS
 
 # ===================== DEPENDENCIES ===================== #
 
 def discover_source_files(path):
-	sources = []
 	if not os.path.isdir(path):
 		log_error(f"Source path '{path}' is not a directory'")
 		return ERROR
 
-	log_debug(f"Searching '{path}/'")
+	log_debug(f"Searching '{path}/' for source files")
+	sources = []
 	for file in os.listdir(path):
 		file = f"{path}/{file}"
-
 		if os.path.isdir(file):
-			sources += discover_source_files(file)
+			files = discover_source_files(file)
+			if files == ERROR:
+				return ERROR
+			sources += files
 		elif file.endswith(".c"):
 			sources.append(file)
-			log_debug(f"Discovered '{file}'")
+			log_success(f"Discovered source file '{file}'")
+
 	return sources
+
+#def discover_header_includes(source):
+#	if not os.path.isfile(source):
+#		log_error(f"Source '{source}' is not a file'")
+#		return ERROR
+#	file = open(source, "r")
+#	code = file.read()
+#	file.close()
+#	lines = code.splitlines()
+
+#	headers = []
+#	for line in lines:
+#		if "#include" in line:
+#			header = line.split()[1]
+#			# ignore system headers
+#			if header.startswith("\"") and header.endswith("\""):
+#				header = header.split("\"")[1]
+#				headers.append(header)
+
+#	return headers
+
+#def locate_header(target, headers):
+#	for header in headers:
+#		if header.endswith(target):
+#			log_success(f"Located header '{target}' at '{header}'")
+#			return header
+#	log_error(f"Failed to locate header '{header}'")
+#	return ERROR
+
+def discover_directories(path):
+	directories = []
+	if not os.path.isdir(path):
+		log_error(f"Source path '{path}' is not a directory'")
+		return ERROR
+
+	log_success(f"Discovered directory '{path}/'")
+	directories.append(path)
+
+	log_debug(f"Searching '{path}/' for directories")
+	for file in os.listdir(path):
+		file = f"{path}/{file}"
+		if os.path.isdir(file):
+			paths = discover_directories(file)
+			if paths == ERROR:
+				return ERROR
+			directories += paths
+
+	return directories
+
+def generate_dependencies(config, source, includes):
+	CC = config['CC']
+	CCFLAGS = " ".join(config['CCFLAGS'])
+	INC = " ".join(includes)
+	command = f"{CC} {CCFLAGS} {INC} -MM {source}"
+
+	try:
+		output = subprocess.check_output(command, shell = True, text = True)
+	except subprocess.CalledProcessError as exception:
+		log_error(f"Failed to generate dependencies for '{source}'")
+		return ERROR
+
+	return output
+
+def out_of_date(object, dependencies):
+
+	for dependency in dependencies:
+		print(dependency)
+		print(os.stat(dependency))
 
 # ===================== MAIN ===================== #
 
@@ -112,9 +197,44 @@ def main():
 
 	sources = []
 	for path in config['SRC']:
-		sources += discover_source_files(path)
+		files = discover_source_files(path)
+		if files == ERROR:
+			return ERROR
+		sources += files
 
-	print(sources)
+	directories = []
+	for path in config['SRC']:
+		paths = discover_directories(path)
+		if paths == ERROR:
+			return ERROR
+		directories += paths
+
+	includes = []
+	for directory in directories:
+		includes.append(f"-I {directory}")
+
+	dependencies = {}
+	for source in sources:
+		output = generate_dependencies(config, source, includes)
+		if output == ERROR:
+			return ERROR
+		output = output.split()
+
+		location = os.path.split(source)[0]
+		object = f"{location}/{output[0]}"
+
+		dependency_list = []
+		for dependency in output[1:]:
+			if dependency == "\\":
+				continue
+			dependency_list.append(dependency)
+
+		dependencies.update({object: dependency_list})
+
+	print(dependencies)
+
+	#for object in dependencies:
+		#out_of_date(object, dependencies[object])
 
 	return SUCCESS
 
