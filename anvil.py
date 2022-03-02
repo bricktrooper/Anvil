@@ -83,7 +83,7 @@ def verify_config(config):
 
 # ===================== DEPENDENCIES ===================== #
 
-def discover_source_files(path):
+def discover_source_files(path, ignores):
 	if not os.path.isdir(path):
 		log.error(f"Source path '{path}' is not a directory'")
 		return ERROR
@@ -92,8 +92,10 @@ def discover_source_files(path):
 	sources = []
 	for file in os.listdir(path):
 		file = f"{path}/{file}"
+		if clean_path(file) in ignores:
+			continue
 		if os.path.isdir(file):
-			files = discover_source_files(file)
+			files = discover_source_files(file, ignores)
 			if files == ERROR:
 				return ERROR
 			sources += files
@@ -105,7 +107,7 @@ def discover_source_files(path):
 		sources[i] = clean_path(sources[i])
 	return sources
 
-def discover_directories(path):
+def discover_directories(path, ignores):
 	directories = []
 	if not os.path.isdir(path):
 		log.error(f"Source path '{path}' is not a directory'")
@@ -117,8 +119,10 @@ def discover_directories(path):
 	log.debug(f"Searching '{path}/' for directories")
 	for file in os.listdir(path):
 		file = f"{path}/{file}"
+		if clean_path(file) in ignores:
+			continue
 		if os.path.isdir(file):
-			paths = discover_directories(file)
+			paths = discover_directories(file, ignores)
 			if paths == ERROR:
 				return ERROR
 			directories += paths
@@ -212,7 +216,7 @@ def anvil(command):
 	if config == ERROR or verify_config(config) == ERROR:
 		return ERROR
 
-	artifacts = config['ART']
+	artifacts = clean_path(config['ART'])
 	if command == "clean":
 		if os.path.exists(artifacts):
 			shutil.rmtree(artifacts)
@@ -221,27 +225,26 @@ def anvil(command):
 
 	sources = []
 	for path in config['SRC']:
-		files = discover_source_files(path)
+		files = discover_source_files(path, [artifacts])
 		if files == ERROR:
 			return ERROR
 		sources += files
 
 	directories = []
 	for path in config['SRC']:
-		paths = discover_directories(path)
+		paths = discover_directories(path, [artifacts])
 		if paths == ERROR:
 			return ERROR
 		directories += paths
 
 	if not os.path.exists(artifacts):
 		os.mkdir(artifacts)
-		log.success(f"MKDIR '{artifacts}'")
+		log.debug(f"MKDIR {artifacts}")
 	for directory in directories:
 		directory = f"{artifacts}/{directory}"
 		if not os.path.exists(directory):
-			log.note(directory)
 			os.mkdir(directory)
-			log.success(f"MKDIR '{directory}'")
+			log.debug(f"MKDIR {directory}")
 
 	includes = []
 	for directory in directories:

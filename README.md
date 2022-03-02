@@ -1,2 +1,3 @@
 # Anvil
-Coming Soon
+
+Makefiles suck.  Use this instead.
