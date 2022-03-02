@@ -2,6 +2,9 @@ import os
 import json
 import subprocess
 import log
+import shutil
+
+from sys import argv
 
 # ===================== CONSTANTS ===================== #
 
@@ -19,6 +22,13 @@ CONFIG_FIELDS = {
 	"LDLIBS": list,
 	"SRC": list
 }
+
+# ===================== UTIL ===================== #
+
+def clean_path(path):
+	if path.startswith("./"):
+		return path.replace("./", "")
+	return path
 
 # ===================== CONFIG ===================== #
 
@@ -91,6 +101,8 @@ def discover_source_files(path):
 			sources.append(file)
 			log.debug(f"Discovered source file '{file}'")
 
+	for i in range(len(sources)):
+		sources[i] = clean_path(sources[i])
 	return sources
 
 def discover_directories(path):
@@ -111,6 +123,8 @@ def discover_directories(path):
 				return ERROR
 			directories += paths
 
+	for i in range(len(directories)):
+		directories[i] = clean_path(directories[i])
 	return directories
 
 def generate_dependencies(config, source, includes):
@@ -126,7 +140,7 @@ def generate_dependencies(config, source, includes):
 		return ERROR
 	return output
 
-def out_of_date(object, dependencies):
+def objects_out_of_date(object, dependencies):
 	if not os.path.exists(object):
 		log.debug(f"'{object}' has never been compiled")
 		return True
@@ -137,35 +151,73 @@ def out_of_date(object, dependencies):
 			log.debug(f"'{object}' is out of date")
 			return True
 
+def binary_out_of_date(binary, objects):
+	if not os.path.exists(binary):
+		log.debug(f"'{binary}' has never been linked")
+		return True
+	last_compiled = os.stat(binary).st_mtime
+	for object in objects:
+		last_modified = os.stat(object).st_mtime
+		if last_compiled < last_modified:
+			log.debug(f"'{binary}' is out of date")
+			return True
+
 # ===================== BUILD ===================== #
 
 def compile(object, source, config, includes):
 	CC = config['CC']
 	CCFLAGS = " ".join(config['CCFLAGS'])
 	INC = " ".join(includes)
+	OBJ = object
+	SRC = source
 
-	command = f"{CC} {CCFLAGS} {INC} -o {object} -c {source}"
+	command = f"{CC} {CCFLAGS} {INC} -o {OBJ} -c {SRC}"
 	log.debug(command)
 	try:
 		output = subprocess.check_output(command, shell = True, text = True)
 	except subprocess.CalledProcessError as exception:
-		log.error(f"CC {source}")
+		log.error(f"CC  {SRC}")
 		return ERROR
 
-	log.success(f"CC {source}")
+	log.success(f"CC  {SRC}")
 	return SUCCESS
 
-def link(objects):
-	#LDFLAGS = " ".join(config['LDFLAGS'])
-	#LDLIBS = " ".join(config['LDLIBS'])
-	pass
+def link(objects, config, includes):
+	CC = config['CC']
+	EXE = f"{config['ART']}/{config['EXE']}"
+	LDFLAGS = " ".join(config['LDFLAGS'])
+	LDLIBS = " ".join(config['LDLIBS'])
+	INC = " ".join(includes)
+	objects = list(objects)
+	OBJ = " ".join(objects)
+
+	command = f"{CC} {LDFLAGS} {INC} {LDLIBS} -o {EXE} {OBJ}"
+	log.debug(command)
+	try:
+		output = subprocess.check_output(command, shell = True, text = True)
+	except subprocess.CalledProcessError as exception:
+		log.error(f"LD  {OBJ}")
+		return ERROR
+
+	log.success(f"LD  {OBJ}")
+	log.success(f"EXE {EXE}")
+	return SUCCESS
 
 # ===================== MAIN ===================== #
 
-def main():
+SUBCOMMANDS = ["make", "clean"]
+
+def anvil(command):
 	config = load_config(CONFIG_FILE_NAME)
 	if config == ERROR or verify_config(config) == ERROR:
 		return ERROR
+
+	artifacts = config['ART']
+	if command == "clean":
+		if os.path.exists(artifacts):
+			shutil.rmtree(artifacts)
+			log.success(f"RM {clean_path(artifacts)}/")
+		return SUCCESS
 
 	sources = []
 	for path in config['SRC']:
@@ -181,14 +233,15 @@ def main():
 			return ERROR
 		directories += paths
 
-	artifacts = config['ART']
-
 	if not os.path.exists(artifacts):
 		os.mkdir(artifacts)
+		log.success(f"MKDIR '{artifacts}'")
 	for directory in directories:
 		directory = f"{artifacts}/{directory}"
 		if not os.path.exists(directory):
+			log.note(directory)
 			os.mkdir(directory)
+			log.success(f"MKDIR '{directory}'")
 
 	includes = []
 	for directory in directories:
@@ -202,7 +255,9 @@ def main():
 		output = output.split()
 
 		object = source.replace(".c", ".o")
+		object = clean_path(object)
 		object = f"{artifacts}/{object}"
+
 		dependency_list = []
 		for dependency in output[1:]:
 			if dependency == "\\":
@@ -211,13 +266,42 @@ def main():
 
 		dependencies.update({object: dependency_list})
 
-	for object in dependencies.keys():
-		if out_of_date(object, dependencies[object]):
+	objects = dependencies.keys()
+	relink = False
+	for object in objects:
+		if objects_out_of_date(object, dependencies[object]):
 			source = object.replace(f"{artifacts}/", "").replace(".o", ".c")
-			print(source)
-			compile(object, source, config, includes)
+			if compile(object, source, config, includes) == ERROR:
+				return ERROR
+			relink = True
+
+	binary = config['EXE']
+	if binary_out_of_date(f"{artifacts}/{binary}", objects):
+		relink = True
+
+	if relink:
+		if link(objects, config, includes) == ERROR:
+			return ERROR
 
 	return SUCCESS
 
-log.suppress(log.Level.DEBUG)
+MAX_ARGC = 2
+MIN_ARGC = 1
+
+def main():
+	argc = len(argv)
+	if argc < MIN_ARGC or argc > MAX_ARGC:
+		log.error("Incorrect arguments")
+		return ERROR
+
+	subcommand = "make"
+	if argc > 1:
+		subcommand = argv[1]
+	if subcommand not in SUBCOMMANDS:
+		log.error(f"Unknown subcommand '{subcommand}'")
+		return ERROR
+
+	log.suppress(log.Level.DEBUG)
+	anvil(subcommand)
+
 exit(main())

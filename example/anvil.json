@@ -1,9 +1,9 @@
 {
 	"ART": "build",
-	"EXE": "hello",
+	"EXE": "yo",
 	"CC": "clang",
 	"CCFLAGS": [],
 	"LDFLAGS": [],
 	"LDLIBS": [],
-	"SRC": ["example"]
+	"SRC": ["."]
 }
